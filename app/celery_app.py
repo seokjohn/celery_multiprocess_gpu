@@ -19,18 +19,26 @@ def configure_workers(sender=None, **kwargs):
 @worker_process_init.connect
 def set_gpu_for_concurrency(**kwargs):
     print("[*] Init set gpu for concurrency")
-    gpu_num = len(os.environ.get("CUDA_VISIBLE_DEVICES").split(","))
-    celery_app.control.inspect().active()
-    celery_app.control.inspect().stats()
-    inspect: dict = celery_app.control.inspect([str(WORKER_NAME)]).stats()
-    if not PID_GPU_NUM:
-        if inspect:
-            concurrency_pid_list = list(inspect.values())[0]['pool']['processes']
+    load_count = 0
+    max_load_count = 6
+
+    while True:
+        gpu_num = len(os.environ.get("CUDA_VISIBLE_DEVICES").split(","))
+        inspector = celery_app.control.inspect()
+        inspector.active()
+        inspector.registered()
+        inspector_stats = inspector.stats()
+
+        if inspector_stats:
+            inspect: dict = inspector_stats.get(str(WORKER_NAME))
+            concurrency_pid_list = inspect['pool']['processes']
             assert gpu_num >= len(concurrency_pid_list)
 
-            global PID_GPU_NUM
             for gpu, pid in zip(range(gpu_num), concurrency_pid_list):
                 PID_GPU_NUM[pid] = f"cuda:{gpu}"
 
+            break
         else:
-            print("[*] Not found Celery Inspect")
+            if load_count >= max_load_count:
+                raise Exception("Inspector Set Error")
+            load_count += 1
